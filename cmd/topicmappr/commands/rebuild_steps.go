@@ -98,13 +98,6 @@ func runRebuild(params rebuildParams, ka kafkaadmin.KafkaAdmin, zk kafkazk.Handl
 		}
 	}
 
-	// Create substitution affinities.
-	affinities := getSubAffinities(params, brokers, brokersOrig, partitionMapIn)
-
-	if affinities != nil {
-		fmt.Printf("%s-\n", indent)
-	}
-
 	// Print changes, actions.
 	printChangesActions(params, bs)
 
@@ -113,7 +106,7 @@ func runRebuild(params rebuildParams, ka kafkaadmin.KafkaAdmin, zk kafkazk.Handl
 
 	// Build a new map using the provided list of brokers. This is OK to run even
 	// when a no-op is intended.
-	partitionMapOut, errs := buildMap(params, partitionMapIn, partitionMeta, brokers, affinities)
+	partitionMapOut, errs := buildMap(params, partitionMapIn, partitionMeta, brokers)
 
 	// Optimize leaders.
 	if params.optimizeLeadership {
@@ -210,43 +203,17 @@ func getPartitionMap(params rebuildParams, ka kafkaadmin.KafkaAdmin) (*mapper.Pa
 	return nil, nil, nil
 }
 
-// getSubAffinities, if enabled via --sub-affinity, takes reference broker maps
-// and a partition map and attempts to return a complete SubstitutionAffinities.
-func getSubAffinities(params rebuildParams, bm mapper.BrokerMap, bmo mapper.BrokerMap, pm *mapper.PartitionMap) mapper.SubstitutionAffinities {
-	var affinities mapper.SubstitutionAffinities
-
-	if params.subAffinity && !params.forceRebuild {
-		var err error
-		affinities, err = bm.SubstitutionAffinities(pm)
-		if err != nil {
-			fmt.Printf("Substitution affinity error: %s\n", err.Error())
-			os.Exit(1)
-		}
-	}
-
-	// Print whether any affinities were inferred.
-	for a, b := range affinities {
-		var inferred string
-		if bmo[a].Missing {
-			inferred = "(inferred)"
-		}
-		fmt.Printf("%sSubstitution affinity: %d -> %d %s\n", indent, a, b.ID, inferred)
-	}
-
-	return affinities
-}
-
 // getBrokers takes a PartitionMap and BrokerMetaMap and returns a BrokerMap
 // along with a BrokerStatus. These two structures hold metadata describing
 // broker state (rack IDs, whether they need to be replaced, newly provided, etc.)
 // and general statistics.
-// - The BrokerMap is later used in map rebuild time as the canonical source of
-//   broker state. Brokers that need to be removed (either because they were not
-//   registered in ZooKeeper or were removed from the --brokers list) are determined here.
-// - The BrokerStatus is used for purely informational output, such as how many missing
-//   brokers were discovered or newly provided (i.e. specified in the --brokers flag but
-//   not previously holding any partitions for any partitions of the referenced topics
-//   being rebuilt by topicmappr)
+//   - The BrokerMap is later used in map rebuild time as the canonical source of
+//     broker state. Brokers that need to be removed (either because they were not
+//     registered in ZooKeeper or were removed from the --brokers list) are determined here.
+//   - The BrokerStatus is used for purely informational output, such as how many missing
+//     brokers were discovered or newly provided (i.e. specified in the --brokers flag but
+//     not previously holding any partitions for any partitions of the referenced topics
+//     being rebuilt by topicmappr)
 func getBrokers(params rebuildParams, pm *mapper.PartitionMap, bm mapper.BrokerMetaMap) (mapper.BrokerMap, *mapper.BrokerStatus) {
 	fmt.Printf("\nBroker change summary:\n")
 
@@ -328,7 +295,7 @@ func updateReplicationFactor(params rebuildParams, pm *mapper.PartitionMap) {
 // buildMap takes an input PartitionMap, rebuild parameters, and all partition/broker
 // metadata structures required to generate the output PartitionMap. A []string of
 // warnings / advisories is returned if any are encountered.
-func buildMap(params rebuildParams, pm *mapper.PartitionMap, pmm mapper.PartitionMetaMap, bm mapper.BrokerMap, af mapper.SubstitutionAffinities) (*mapper.PartitionMap, errors) {
+func buildMap(params rebuildParams, pm *mapper.PartitionMap, pmm mapper.PartitionMetaMap, bm mapper.BrokerMap) (*mapper.PartitionMap, errors) {
 	rebuildParams := mapper.RebuildParams{
 		PMM:              pmm,
 		BM:               bm,
@@ -336,9 +303,6 @@ func buildMap(params rebuildParams, pm *mapper.PartitionMap, pmm mapper.Partitio
 		Optimization:     params.optimize,
 		PartnSzFactor:    params.partitionSizeFactor,
 		MinUniqueRackIDs: params.minRackIds,
-	}
-	if af != nil {
-		rebuildParams.Affinities = af
 	}
 
 	// If we're doing a force rebuild, the input map must have all brokers stripped out.

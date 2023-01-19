@@ -66,7 +66,6 @@ type rebuildParams struct {
 	placement           string
 	replication         int
 	skipNoOps           bool
-	subAffinity         bool
 	topics              []string
 	topicsExclude       []*regexp.Regexp
 	useMetadata         bool
@@ -100,8 +99,6 @@ func rebuildParamsFromCmd(cmd *cobra.Command) (params rebuildParams) {
 	params.replication = replication
 	skipNoOps, _ := cmd.Flags().GetBool("skip-no-ops")
 	params.skipNoOps = skipNoOps
-	subAffinity, _ := cmd.Flags().GetBool("sub-affinity")
-	params.subAffinity = subAffinity
 	topics, _ := cmd.Flags().GetString("topics")
 	params.topics = strings.Split(topics, ",")
 	topicsExclude, _ := cmd.Flags().GetString("topics-exclude")
@@ -131,8 +128,6 @@ func (c rebuildParams) validate() error {
 		return fmt.Errorf("\n[ERROR] --optimize must be either 'distribution' or 'storage'")
 	case !c.useMetadata && c.placement == "storage":
 		return fmt.Errorf("\n[ERROR] --placement=storage requires --use-meta=true")
-	case c.forceRebuild && c.subAffinity:
-		return fmt.Errorf("\n[INFO] --force-rebuild disables --sub-affinity")
 	case (len(c.leaderEvacBrokers) != 0 || len(c.leaderEvacTopics) != 0) && (len(c.leaderEvacBrokers) == 0 || len(c.leaderEvacTopics) == 0):
 		return fmt.Errorf("\n[ERROR] --leader-evac-topics and --leader-evac-brokers must both be specified for leadership evacuation.")
 	}
@@ -147,9 +142,6 @@ func rebuild(cmd *cobra.Command, _ []string) {
 	if err != nil {
 		fmt.Println(err)
 		defaultsAndExit()
-	}
-	if params.forceRebuild && params.subAffinity {
-		fmt.Println("\n[INFO] --force-rebuild disables --sub-affinity")
 	}
 
 	// Init kafkaadmin client.

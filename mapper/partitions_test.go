@@ -434,61 +434,6 @@ func TestRebuildByCount(t *testing.T) {
 	}
 }
 
-// Count rebuild with substitution affinities.
-func TestRebuildByCountSA(t *testing.T) {
-	forceRebuild := true
-	withMetrics := false
-
-	zk := NewZooKeeperStub()
-	bm, _ := zk.GetAllBrokerMeta(withMetrics)
-	// Simulate that we've lost broker 1002.
-	delete(bm, 1002)
-
-	pm, _ := PartitionMapFromString(testGetMapString4("test_topic"))
-	// Until https://github.com/DataDog/kafka-kit/issues/187 is closed, we need to
-	// pretend another broker with rack b was present.
-	pm.Partitions[2].Replicas = []int{1001, 1005}
-
-	pmm := NewPartitionMetaMap()
-	brokers := BrokerMapFromPartitionMap(pm, bm, forceRebuild)
-
-	// simulate that we've found broker 1010.
-	bm[1010] = &BrokerMeta{Rack: "b"}
-	brokers.Update([]int{1001, 1003, 1004, 1005, 1010}, bm)
-
-	// Get substitution affinities.
-	sa, err := brokers.SubstitutionAffinities(pm)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	rebuildParams := RebuildParams{
-		PMM:          pmm,
-		BM:           brokers,
-		Strategy:     "count",
-		Optimization: "distribution",
-		Affinities:   sa,
-	}
-
-	// Rebuild.
-	out, errs := pm.Rebuild(rebuildParams)
-	if errs != nil {
-		t.Errorf("Unexpected error(s): %s", errs)
-	}
-
-	expected, _ := PartitionMapFromString(testGetMapString4("test_topic"))
-	expected.Partitions[0].Replicas = []int{1004, 1003}
-	expected.Partitions[1].Replicas = []int{1003, 1004}
-	expected.Partitions[2].Replicas = []int{1001, 1005}
-	expected.Partitions[3].Replicas = []int{1003, 1010}
-	expected.Partitions[4].Replicas = []int{1001, 1003}
-	expected.Partitions[5].Replicas = []int{1010, 1001}
-
-	if same, err := out.Equal(expected); !same {
-		t.Errorf("Unexpected inequality after rebuild: %s", err)
-	}
-}
-
 // Storage rebuild, distribution optimization.
 func TestRebuildByStorageDistribution(t *testing.T) {
 	forceRebuild := true

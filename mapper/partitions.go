@@ -187,7 +187,6 @@ type RebuildParams struct {
 	BM               BrokerMap
 	Strategy         string
 	Optimization     string
-	Affinities       SubstitutionAffinities
 	PartnSzFactor    float64
 	MinUniqueRackIDs int
 }
@@ -363,23 +362,8 @@ func placeByPosition(params RebuildParams) (*PartitionMap, []error) {
 				var err error
 
 				// If we're using the count method, check if a substitution affinity is set for this broker.
-				affinity := params.Affinities.Get(bid)
-				if params.Strategy == "count" && affinity != nil {
-					replacement = affinity
-					// Ensure the replacement passes constraints. This is usually checked
-					// at the time of building a substitution affinities map, but in
-					// scenarios where the replacement broker was completely missing from
-					// the cluster, its rack ID is unknown and a suitable sub has to be
-					// inferred. We're checking that it passes here in case the inference
-					// logic is faulty.
-					if passes := constraints.passesWithParams(replacement, constraintsParams); !passes {
-						err = ErrNoBrokers
-					}
-				} else {
-					// Otherwise, use the standard constraints based selector.
-					constraintsParams.SeedVal = int64(pass*n + 1)
-					replacement, err = constraints.SelectBroker(bl, constraintsParams)
-				}
+				constraintsParams.SeedVal = int64(pass*n + 1)
+				replacement, err = constraints.SelectBroker(bl, constraintsParams)
 
 				if err != nil {
 					// Append any caught errors.
