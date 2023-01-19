@@ -102,7 +102,6 @@ Flags:
       --placement string              Partition placement strategy: [count, storage] (default "count")
       --replication int               Normalize the topic replication factor across all replica sets (0 results in a no-op)
       --skip-no-ops                   Skip no-op partition assigments
-      --sub-affinity                  Replacement broker substitution affinity
       --topics string                 Rebuild topics (comma delim. list) by lookup in ZooKeeper
       --topics-exclude string         Exclude topics
       --use-meta                      Use broker metadata in placement constraints (default true)

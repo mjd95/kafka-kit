@@ -50,13 +50,12 @@ func runRebuild(params rebuildParams, ka kafkaadmin.KafkaAdmin, zk kafkazk.Handl
 
 	var brokerMeta mapper.BrokerMetaMap
 	var errs []error
-	if params.useMetadata {
-		if brokerMeta, errs = getBrokerMeta(ka, zk, withMetrics); errs != nil && brokerMeta == nil {
-			for _, e := range errs {
-				fmt.Println(e)
-			}
-			os.Exit(1)
+	if brokerMeta, errs = getBrokerMeta(ka, zk, withMetrics); errs != nil && brokerMeta == nil {
+		for _, e := range errs {
+			fmt.Println(e)
+			errs = append(errs, err)
 		}
+		return nil, errs
 	}
 
 	// Fetch partition metadata.
@@ -89,13 +88,12 @@ func runRebuild(params rebuildParams, ka kafkaadmin.KafkaAdmin, zk kafkazk.Handl
 
 	// Check if any referenced brokers are marked as having
 	// missing/partial metrics data.
-	if params.useMetadata {
-		if errs := ensureBrokerMetrics(brokers, brokerMeta); len(errs) > 0 {
-			for _, e := range errs {
-				fmt.Println(e)
-			}
-			os.Exit(1)
+	if errs := ensureBrokerMetrics(brokers, brokerMeta); len(errs) > 0 {
+		for _, e := range errs {
+			fmt.Println(e)
+			errs = append(errs, err)
 		}
+		return nil, errs
 	}
 
 	// Print changes, actions.

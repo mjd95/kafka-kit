@@ -35,7 +35,6 @@ func init() {
 	rebuildCmd.Flags().String("out-file", "", "If defined, write a combined map of all topics to a file")
 	rebuildCmd.Flags().Bool("force-rebuild", false, "Forces a complete map rebuild")
 	rebuildCmd.Flags().Int("replication", 0, "Normalize the topic replication factor across all replica sets (0 results in a no-op)")
-	rebuildCmd.Flags().Bool("sub-affinity", false, "Replacement broker substitution affinity")
 	rebuildCmd.Flags().String("placement", "count", "Partition placement strategy: [count, storage]")
 	rebuildCmd.Flags().Int("min-rack-ids", 0, "Minimum number of required of unique rack IDs per replica set (0 requires that all are unique)")
 	rebuildCmd.Flags().String("optimize", "distribution", "Optimization priority for the storage placement strategy: [distribution, storage]")
@@ -68,7 +67,6 @@ type rebuildParams struct {
 	skipNoOps           bool
 	topics              []string
 	topicsExclude       []*regexp.Regexp
-	useMetadata         bool
 	leaderEvacTopics    []string
 	leaderEvacBrokers   []int
 	chunkStepSize       int
@@ -103,8 +101,6 @@ func rebuildParamsFromCmd(cmd *cobra.Command) (params rebuildParams) {
 	params.topics = strings.Split(topics, ",")
 	topicsExclude, _ := cmd.Flags().GetString("topics-exclude")
 	params.topicsExclude = topicRegex(topicsExclude)
-	useMetadata, _ := cmd.Flags().GetBool("use-meta")
-	params.useMetadata = useMetadata
 	chunkStepSize, _ := cmd.Flags().GetInt("chunk-step-size")
 	params.chunkStepSize = chunkStepSize
 	let, _ := cmd.Flags().GetString("leader-evac-topics")
@@ -126,8 +122,6 @@ func (c rebuildParams) validate() error {
 		return fmt.Errorf("\n[ERROR] --placement must be either 'count' or 'storage'")
 	case c.optimize != "distribution" && c.optimize != "storage":
 		return fmt.Errorf("\n[ERROR] --optimize must be either 'distribution' or 'storage'")
-	case !c.useMetadata && c.placement == "storage":
-		return fmt.Errorf("\n[ERROR] --placement=storage requires --use-meta=true")
 	case (len(c.leaderEvacBrokers) != 0 || len(c.leaderEvacTopics) != 0) && (len(c.leaderEvacBrokers) == 0 || len(c.leaderEvacTopics) == 0):
 		return fmt.Errorf("\n[ERROR] --leader-evac-topics and --leader-evac-brokers must both be specified for leadership evacuation.")
 	}
@@ -154,7 +148,7 @@ func rebuild(cmd *cobra.Command, _ []string) {
 
 	// ZooKeeper init.
 	var zk kafkazk.Handler
-	if params.useMetadata || len(params.topics) > 0 || params.placement == "storage" {
+	if len(params.topics) > 0 || params.placement == "storage" {
 		zkAddr := cmd.Parent().Flag("zk-addr").Value.String()
 		kafkaPrefix := cmd.Parent().Flag("zk-prefix").Value.String()
 		metricsPrefix := cmd.Flag("zk-metrics-prefix").Value.String()
