@@ -30,14 +30,12 @@ func init() {
 	rebuildCmd.Flags().String("topics", "", "Rebuild topics (comma delim. list) by lookup in ZooKeeper")
 	rebuildCmd.Flags().String("topics-exclude", "", "Exclude topics")
 	rebuildCmd.Flags().String("map-string", "", "Rebuild a partition map provided as a string literal")
-	rebuildCmd.Flags().Bool("use-meta", true, "Use broker metadata in placement constraints")
 	rebuildCmd.Flags().String("out-path", "", "Path to write output map files to")
 	rebuildCmd.Flags().String("out-file", "", "If defined, write a combined map of all topics to a file")
 	rebuildCmd.Flags().Bool("force-rebuild", false, "Forces a complete map rebuild")
 	rebuildCmd.Flags().Int("replication", 0, "Normalize the topic replication factor across all replica sets (0 results in a no-op)")
 	rebuildCmd.Flags().String("placement", "count", "Partition placement strategy: [count, storage]")
 	rebuildCmd.Flags().Int("min-rack-ids", 0, "Minimum number of required of unique rack IDs per replica set (0 requires that all are unique)")
-	rebuildCmd.Flags().String("optimize", "distribution", "Optimization priority for the storage placement strategy: [distribution, storage]")
 	rebuildCmd.Flags().Float64("partition-size-factor", 1.0, "Factor by which to multiply partition sizes when using storage placement")
 	rebuildCmd.Flags().String("brokers", "", "Broker list to scope all partition placements to ('-1' for all currently mapped brokers, '-2' for all brokers in cluster)")
 	rebuildCmd.Flags().Int("metrics-age", 60, "Kafka metrics age tolerance (in minutes) (when using storage placement)")
@@ -58,7 +56,6 @@ type rebuildParams struct {
 	mapString           string
 	maxMetadataAge      int
 	minRackIds          int
-	optimize            string
 	optimizeLeadership  bool
 	partitionSizeFactor float64
 	phasedReassignment  bool
@@ -83,8 +80,6 @@ func rebuildParamsFromCmd(cmd *cobra.Command) (params rebuildParams) {
 	params.maxMetadataAge = maxMetadataAge
 	minRackIds, _ := cmd.Flags().GetInt("min-rack-ids")
 	params.minRackIds = minRackIds
-	optimize, _ := cmd.Flags().GetString("optimize")
-	params.optimize = optimize
 	optimizeLeadership, _ := cmd.Flags().GetBool("optimize-leadership")
 	params.optimizeLeadership = optimizeLeadership
 	partitionSizeFactor, _ := cmd.Flags().GetFloat64("partition-size-factor")
@@ -120,10 +115,8 @@ func (c rebuildParams) validate() error {
 		return fmt.Errorf("\n[ERROR] must specify either --topics or --map-string")
 	case c.placement != "count" && c.placement != "storage":
 		return fmt.Errorf("\n[ERROR] --placement must be either 'count' or 'storage'")
-	case c.optimize != "distribution" && c.optimize != "storage":
-		return fmt.Errorf("\n[ERROR] --optimize must be either 'distribution' or 'storage'")
 	case (len(c.leaderEvacBrokers) != 0 || len(c.leaderEvacTopics) != 0) && (len(c.leaderEvacBrokers) == 0 || len(c.leaderEvacTopics) == 0):
-		return fmt.Errorf("\n[ERROR] --leader-evac-topics and --leader-evac-brokers must both be specified for leadership evacuation.")
+		return fmt.Errorf("\n[ERROR] --leader-evac-topics and --leader-evac-brokers must both be specified for leadership evacuation")
 	}
 	return nil
 }

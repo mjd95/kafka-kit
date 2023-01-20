@@ -186,7 +186,6 @@ type RebuildParams struct {
 	PMM              PartitionMetaMap
 	BM               BrokerMap
 	Strategy         string
-	Optimization     string
 	PartnSzFactor    float64
 	MinUniqueRackIDs int
 }
@@ -226,9 +225,9 @@ func (pm *PartitionMap) Rebuild(params RebuildParams) (*PartitionMap, []error) {
 
 	switch params.Strategy {
 	case "count":
-		// Standard sort
+		// sort partitions by (topic name, partition id)
 		sort.Sort(params.pm.Partitions)
-		// Perform placements.
+		// todo understand this fn
 		newMap, errs = placeByPosition(params)
 	case "storage":
 		// Sort by size.
@@ -239,24 +238,11 @@ func (pm *PartitionMap) Rebuild(params RebuildParams) (*PartitionMap, []error) {
 		sort.Sort(partitionsBySize(s))
 		// Perform placements. The placement method depends on the choosen
 		// optimization param.
-		switch params.Optimization {
-		case "distribution":
-			newMap, errs = placeByPosition(params)
-		case "storage":
-			newMap, errs = placeByPartition(params)
-			// Shuffle replica sets. placeByPartition suffers from suboptimal
-			// leadership distribution because of the requirement to choose all
-			// brokers for each partition at a time (in contrast to placeByPosition).
-			// Shuffling has proven so far to distribute leadership even though it's
-			// purely by probability. Eventually, we should write a real optimizer.
-			newMap.shuffle(func(_ Partition) bool { return true })
-		// Invalid optimization.
-		default:
-			return nil, []error{fmt.Errorf("Invalid optimization '%s'", params.Optimization)}
-		}
+		// by default optimization is distribution
+		newMap, errs = placeByPosition(params)
 	// Invalid placement.
 	default:
-		return nil, []error{fmt.Errorf("Invalid rebuild strategy '%s'", params.Strategy)}
+		return nil, []error{fmt.Errorf("invalid rebuild strategy '%s'", params.Strategy)}
 	}
 
 	// Final sort.

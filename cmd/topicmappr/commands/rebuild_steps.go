@@ -298,7 +298,6 @@ func buildMap(params rebuildParams, pm *mapper.PartitionMap, pmm mapper.Partitio
 		PMM:              pmm,
 		BM:               bm,
 		Strategy:         params.placement,
-		Optimization:     params.optimize,
 		PartnSzFactor:    params.partitionSizeFactor,
 		MinUniqueRackIDs: params.minRackIds,
 	}
