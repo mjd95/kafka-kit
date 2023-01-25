@@ -246,7 +246,7 @@ func writeMaps(outPath, outFile string, pms []*mapper.PartitionMap) {
 	}
 }
 
-func printReassignmentParams(params reassignParams, results []reassignmentBundle, brokers mapper.BrokerMap, tol float64) {
+func printReassignmentParams(params reassignParams, result reassignmentBundle, brokers mapper.BrokerMap, tol float64) {
 	fmt.Printf("\nReassignment parameters:\n")
 
 	mean, hMean := brokers.Mean(), brokers.HMean()
@@ -260,18 +260,6 @@ func printReassignmentParams(params reassignParams, results []reassignmentBundle
 
 	fmt.Printf("%s%sSources limited to <= %.2fGB\n", indent, indent, mean*(1+tol)/div)
 	fmt.Printf("%s%sDestinations limited to >= %.2fGB\n", indent, indent, mean*(1-tol)/div)
-
-	// Print the top 10 rebalance results in verbose.
-	if params.verbose {
-		fmt.Printf("%s-\nTop 10 reassignment map results\n", indent)
-		for i, r := range results {
-			fmt.Printf("%stolerance: %.2f -> range: %.2fGB, std. deviation: %.2fGB\n",
-				indent, r.tolerance, r.storageRange/div, r.stdDev/div)
-			if i == 10 {
-				break
-			}
-		}
-	}
 }
 
 func printPlannedRelocations(targets []int, relos map[int][]relocation, pmm mapper.PartitionMetaMap) {

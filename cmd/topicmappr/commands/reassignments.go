@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/DataDog/kafka-kit/v4/kafkaadmin"
 	"github.com/DataDog/kafka-kit/v4/kafkazk"
@@ -135,7 +134,7 @@ func reassign(params reassignParams, ka kafkaadmin.KafkaAdmin, zk kafkazk.Handle
 	sort.Sort(offloadTargetsBySize{t: offloadTargets, bm: brokersIn})
 
 	// Generate reassignmentBundles for a rebalance.
-	results := computeReassignmentBundles(
+	result := computeReassignmentBundles(
 		params,
 		partitionMapIn,
 		partitionMeta,
@@ -143,30 +142,11 @@ func reassign(params reassignParams, ka kafkaadmin.KafkaAdmin, zk kafkazk.Handle
 		offloadTargets,
 	)
 
-	// Merge all results into a slice.
-	resultsByRange := []reassignmentBundle{}
-	for r := range results {
-		resultsByRange = append(resultsByRange, r)
-	}
-
-	// Sort the rebalance results by range ascending.
-	sort.Slice(resultsByRange, func(i, j int) bool {
-		switch {
-		case resultsByRange[i].storageRange < resultsByRange[j].storageRange:
-			return true
-		case resultsByRange[i].storageRange > resultsByRange[j].storageRange:
-			return false
-		}
-
-		return resultsByRange[i].stdDev < resultsByRange[j].stdDev
-	})
-
 	// Chose the results with the lowest range.
-	m := resultsByRange[0]
-	partitionMapOut, brokersOut, relos := m.partitionMap, m.brokers, m.relocations
+	partitionMapOut, brokersOut, relos := result.partitionMap, result.brokers, result.relocations
 
 	// Print parameters used for rebalance decisions.
-	printReassignmentParams(params, resultsByRange, brokersIn, m.tolerance)
+	printReassignmentParams(params, result, brokersIn, result.tolerance)
 
 	// Optimize leaders.
 	if params.optimizeLeadership {
@@ -183,111 +163,74 @@ func reassign(params reassignParams, ka kafkaadmin.KafkaAdmin, zk kafkazk.Handle
 	errs = printBrokerAssignmentStats(partitionMapIn, partitionMapOut, brokersIn, brokersOut, true, 1.0)
 
 	// Ignore no-ops; rebalances will naturally have a high percentage of these.
-	partitionMapIn, partitionMapOut = skipReassignmentNoOps(partitionMapIn, partitionMapOut)
+	_, partitionMapOut = skipReassignmentNoOps(partitionMapIn, partitionMapOut)
 
 	return []*mapper.PartitionMap{partitionMapOut}, errs
 
 }
 
-// computeReassignmentBundles takes computeReassignmentBundlesParams and returns
-// a chan reassignmentBundle. The channel will either contain a single reassignmentBundle
-// if a fixed computeReassignmentBundlesParams.tolerance value (non 0.00) is
-// specified, otherwise it will contain a series of reassignmentBundle for multiple
-// interval values. When generating a series, the results are computed in parallel.
 func computeReassignmentBundles(
 	params reassignParams,
 	partitionMap *mapper.PartitionMap,
 	partitionMeta mapper.PartitionMetaMap,
 	brokerMap mapper.BrokerMap,
 	offloadTargets []int,
-) chan reassignmentBundle {
+) reassignmentBundle {
 	otm := map[int]struct{}{}
 	for _, id := range offloadTargets {
 		otm[id] = struct{}{}
 	}
 
-	results := make(chan reassignmentBundle, 100)
-	wg := &sync.WaitGroup{}
+	var tol = params.tolerance
 
-	// Compute a reassignmentBundle output for all tolerance values 0.01..0.99 in parallel.
-	for i := 0.01; i < 0.99; i += 0.01 {
-		// Whether we're using a fixed tolerance (non 0.00 value) set via flag or
-		// interval values.
-		var tol float64
+	// Bundle planRelocationsForBrokerParams.
+	relocationParams := planRelocationsForBrokerParams{
+		relos:                  map[int][]relocation{},
+		mappings:               partitionMap.Mappings(),
+		brokers:                brokerMap.Copy(),
+		partitionMeta:          partitionMeta,
+		plan:                   relocationPlan{},
+		topPartitionsLimit:     params.partitionLimit,
+		partitionSizeThreshold: params.partitionSizeThreshold,
+		offloadTargetsMap:      otm,
+		tolerance:              tol,
+		localityScoped:         params.localityScoped,
+		verbose:                params.verbose,
+	}
 
-		if params.UseFixedTolerance() {
-			tol = params.tolerance
-		} else {
-			tol = i
-		}
+	// Iterate over offload targets, planning at most one relocation per iteration.
+	// Continue this loop until no more relocations can be planned.
+	for exhaustedCount := 0; exhaustedCount < len(offloadTargets); {
+		relocationParams.pass++
+		for _, sourceID := range offloadTargets {
+			// Update the source broker ID
+			relocationParams.sourceID = sourceID
 
-		wg.Add(1)
+			relos := planRelocationsForBroker(relocationParams)
 
-		go func() {
-			defer wg.Done()
-
-			partitionMap := partitionMap.Copy()
-
-			// Bundle planRelocationsForBrokerParams.
-			relocationParams := planRelocationsForBrokerParams{
-				relos:                  map[int][]relocation{},
-				mappings:               partitionMap.Mappings(),
-				brokers:                brokerMap.Copy(),
-				partitionMeta:          partitionMeta,
-				plan:                   relocationPlan{},
-				topPartitionsLimit:     params.partitionLimit,
-				partitionSizeThreshold: params.partitionSizeThreshold,
-				offloadTargetsMap:      otm,
-				tolerance:              tol,
-				localityScoped:         params.localityScoped,
-				verbose:                params.verbose,
+			// If no relocations could be planned, increment the exhaustion counter.
+			if relos == 0 {
+				exhaustedCount++
 			}
-
-			// Iterate over offload targets, planning at most one relocation per iteration.
-			// Continue this loop until no more relocations can be planned.
-			for exhaustedCount := 0; exhaustedCount < len(offloadTargets); {
-				relocationParams.pass++
-				for _, sourceID := range offloadTargets {
-					// Update the source broker ID
-					relocationParams.sourceID = sourceID
-
-					relos := planRelocationsForBroker(relocationParams)
-
-					// If no relocations could be planned, increment the exhaustion counter.
-					if relos == 0 {
-						exhaustedCount++
-					}
-				}
-			}
-
-			// Update the partition map with the relocation plan.
-			applyRelocationPlan(partitionMap, relocationParams.plan)
-
-			// Insert the reassignmentBundle.
-			results <- reassignmentBundle{
-				storageRange: relocationParams.brokers.StorageRange(),
-				stdDev:       relocationParams.brokers.StorageStdDev(),
-				tolerance:    tol,
-				partitionMap: partitionMap,
-				relocations:  relocationParams.relos,
-				brokers:      relocationParams.brokers,
-			}
-
-		}()
-
-		// Break early if we're using a fixed tolerance value.
-		if params.UseFixedTolerance() {
-			break
 		}
 	}
 
-	wg.Wait()
-	close(results)
+	// Update the partition map with the relocation plan.
+	applyRelocationPlan(partitionMap, relocationParams.plan)
 
-	return results
+	// Insert the reassignmentBundle.
+	return reassignmentBundle{
+		storageRange: relocationParams.brokers.StorageRange(),
+		stdDev:       relocationParams.brokers.StorageStdDev(),
+		tolerance:    tol,
+		partitionMap: partitionMap,
+		relocations:  relocationParams.relos,
+		brokers:      relocationParams.brokers,
+	}
 }
 
-/**
+/*
+*
 getPartitionMapChunks Breaks a reassignment into a series of sequential, smaller reassignments.
 For large reassignments that may take a while, or risky operations that may require downtime in between, a chunked reassignment can be used.
 This will generate a series of partition maps that will converge on the desired state. To minimize data transfer,
