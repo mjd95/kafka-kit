@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"math/rand"
 	"sort"
 
 	"github.com/DataDog/kafka-kit/v4/kafkaadmin"
@@ -227,8 +226,6 @@ func (pm *PartitionMap) Rebuild(params RebuildParams) (*PartitionMap, []error) {
 	case "count":
 		// sort partitions by (topic name, partition id)
 		sort.Sort(params.pm.Partitions)
-		// todo understand this fn
-		newMap, errs = placeByPosition(params)
 	case "storage":
 		// Sort by size.
 		s := partitionsBySize{
@@ -236,14 +233,11 @@ func (pm *PartitionMap) Rebuild(params RebuildParams) (*PartitionMap, []error) {
 			pm: params.PMM,
 		}
 		sort.Sort(partitionsBySize(s))
-		// Perform placements. The placement method depends on the choosen
-		// optimization param.
-		// by default optimization is distribution
-		newMap, errs = placeByPosition(params)
 	// Invalid placement.
 	default:
 		return nil, []error{fmt.Errorf("invalid rebuild strategy '%s'", params.Strategy)}
 	}
+	newMap, errs = placeByPosition(params)
 
 	// Final sort.
 	sort.Sort(newMap.Partitions)
@@ -312,7 +306,7 @@ func placeByPosition(params RebuildParams) (*PartitionMap, []error) {
 			} else {
 				// Otherwise, we need to find a replacement.
 
-				// Build a BrokerList from the IDs in the old replica set to  get a
+				// Build a BrokerList from the IDs in the old replica set to get a
 				// *constraints.
 				replicaSet := BrokerList{}
 				for _, bid := range partn.Replicas {
@@ -366,91 +360,6 @@ func placeByPosition(params RebuildParams) (*PartitionMap, []error) {
 		// Increment the pass.
 		pass++
 
-	}
-
-	// Final check to ensure that no replica sets were somehow set to 0.
-	for _, partn := range newMap.Partitions {
-		if len(partn.Replicas) == 0 {
-			e := fmt.Errorf("%s p%d: configured to zero replicas", partn.Topic, partn.Partition)
-			errs = append(errs, e)
-		}
-	}
-
-	// Return map, errors.
-	return newMap, errs
-}
-
-func placeByPartition(params RebuildParams) (*PartitionMap, []error) {
-	newMap := NewPartitionMap()
-
-	// We need a filtered list for usage sorting and exclusion of nodes marked for
-	// removal.
-	bl := params.BM.Filter(NotReplacedBrokersFn).List()
-
-	var errs []error
-
-	for _, partn := range params.pm.Partitions {
-		// Create the partition in the new map.
-		newPartn := Partition{Partition: partn.Partition, Topic: partn.Topic}
-
-		// Map over each broker from the original  partition replica list to the new,
-		// selecting replacemnt for those marked for replacement.
-		for _, bid := range partn.Replicas {
-			// If the current broker isn't marked for removal, just add it to the same
-			// position in the new map.
-			if !params.BM[bid].Replace {
-				newPartn.Replicas = append(newPartn.Replicas, bid)
-			} else {
-				// Otherwise, we need to find a replacement.
-
-				// Build a BrokerList from the IDs in the old replica set to get a
-				// *constraints.
-				replicaSet := BrokerList{}
-				for _, bid := range partn.Replicas {
-					replicaSet = append(replicaSet, params.BM[bid])
-				}
-				// Add existing brokers in the new replica set as well.
-				for _, bid := range newPartn.Replicas {
-					replicaSet = append(replicaSet, params.BM[bid])
-				}
-
-				// Populate a Constraints.
-				constraints := NewConstraints()
-				constraintsParams := ConstraintsParams{
-					SelectorMethod:   params.Strategy,
-					MinUniqueRackIDs: params.MinUniqueRackIDs,
-					SeedVal:          1,
-				}
-				constraints.MergeConstraints(replicaSet)
-
-				// Add any necessary meta from current partition to the constraints.
-				if params.Strategy == "storage" {
-					s, err := params.PMM.Size(partn)
-					if err != nil {
-						e := fmt.Errorf("%s p%d: %s", partn.Topic, partn.Partition, err.Error())
-						errs = append(errs, e)
-						continue
-					}
-
-					constraintsParams.RequestSize = s * params.PartnSzFactor
-				}
-
-				// Fetch the best candidate and append.
-				replacement, err := constraints.SelectBroker(bl, constraintsParams)
-
-				if err != nil {
-					// Append any caught errors.
-					e := fmt.Errorf("%s p%d: %s", partn.Topic, partn.Partition, err.Error())
-					errs = append(errs, e)
-					continue
-				}
-
-				newPartn.Replicas = append(newPartn.Replicas, replacement.ID)
-			}
-		}
-
-		// Add the partition to the new map.
-		newMap.Partitions = append(newMap.Partitions, newPartn)
 	}
 
 	// Final check to ensure that no replica sets were somehow set to 0.
@@ -521,19 +430,6 @@ func (pm *PartitionMap) LocalitiesAvailable(bm BrokerMap, b *Broker) []string {
 	sort.Strings(diff)
 
 	return diff
-}
-
-func (pm *PartitionMap) shuffle(f func(Partition) bool) {
-	var s int
-	for n := range pm.Partitions {
-		if f(pm.Partitions[n]) {
-			rand.Seed(int64(s << 20))
-			s++
-			rand.Shuffle(len(pm.Partitions[n].Replicas), func(i, j int) {
-				pm.Partitions[n].Replicas[i], pm.Partitions[n].Replicas[j] = pm.Partitions[n].Replicas[j], pm.Partitions[n].Replicas[i]
-			})
-		}
-	}
 }
 
 // PartitionMapFromString takes a json encoded string and returns a *PartitionMap.
